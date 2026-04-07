@@ -1,5 +1,5 @@
 # Codex AI — Expert Coding Agent
-### Built with Google ADK · Python · Gemini Flash · Fast API
+### Built with Google ADK · Python · Gemini Flash/Pro · Fast API
 
 A production-ready AI coding agent with a **modular multi-agent architecture**, **live code execution**, **file uploads**, and a Gemini-inspired dark UI. This project uses a specialized team of autonomous sub-agents coordinated by a central Primary Supervisor.
 
@@ -11,23 +11,36 @@ Codex AI is built as a modular Python package for maximum scalability and mainta
 
 ```text
 codex-ai/
-├── codex_agent/           # Core Agent Package
-│   ├── sub_agents/       # Specialist Agents (Each is a self-contained module)
-│   │   ├── coding_agent/ # Elite Production Logic & Prompts
-│   │   ├── debug_agent/  # Bug Squashing & Security Scans
-│   │   ├── devops_agent/ # CI/CD & Deployment Configs
-│   │   └── docs_agent/   # Technical Documentation & Guides
-│   ├── agent.py          # Primary Supervisor (Orchestrates the experts)
-│   ├── tools.py          # Centralized Toolbox (Execution, Analysis, Security)
+├── codex_agent/             # Core Agent Package
+│   ├── sub_agents/         # Specialist Agent Modules
+│   │   ├── coding_agent/   # Writes & executes production code
+│   │   │   ├── coding_agent.py
+│   │   │   └── coding_agent.md
+│   │   ├── debug_agent/    # Bug hunting & security analysis
+│   │   │   ├── debug_agent.py
+│   │   │   └── debug_agent.md
+│   │   ├── devops_agent/   # CI/CD & infrastructure logic
+│   │   │   ├── devops_agent.py
+│   │   │   └── devops_agent.md
+│   │   └── docs_agent/     # Technical documentation generator
+│   │       ├── docs_agent.py
+│   │       └── docs_agent.md
+│   ├── agent.py            # Primary Supervisor (Orchestration logic)
+│   ├── primary_agent.md    # Supervisor instructions & persona
+│   ├── tools.py            # Centralized Toolbox (Execution, Analysis, Security)
 │   └── __init__.py
 ├── database/
-│   └── chat_history.db    # Persisted Chat History (SQLite)
-├── ui/
-│   └── index.html         # High-Performance Vanilla JS Frontend
-├── server.py              # FastAPI Production Entry Point
-├── requirements.txt       # Core Dependencies
-├── Dockerfile             # Cloud Run & Containerization Ready
-└── .env                   # API Keys & Configuration
+│   └── chat_history.db      # Persisted Chat History (SQLite)
+├── ui/                     # High-Performance Frontend
+│   ├── index.html          # Core layout & structure
+│   ├── style.css           # Premium dark-mode styling
+│   └── app.js              # Real-time state & API integration
+├── tests/                  # Automated Test Suite
+│   └── test_server.py      # Backend & API endpoint validation
+├── server.py               # FastAPI Production Entry Point
+├── requirements.txt        # Core Dependencies
+├── Dockerfile              # Cloud Run & Containerization Ready
+└── .env                     # API Keys & Configuration (local only)
 ```
 
 ---
@@ -37,10 +50,10 @@ codex-ai/
 | Agent | Specialty | Mandate |
 |-------|-----------|---------|
 | **Supervisor** | Orchestration | High-level goal planning and agent delegation. |
-| **Coding** | Production Code | Writing clean, optimized, and dry logic. |
+| **Coding** | Production Code | Writing clean, optimized, and DRY logic. |
 | **Debug** | Bug Hunting | Error analysis, security scanning, and logic fixes. |
 | **DevOps** | Infrastructure | Docker, CI/CD, and deployment automation. |
-| **Docs** | Communication | API reference, READMEs, and technical deep-dives. |
+| **Docs** | Communication | API reference, READMEs, and technical documentation. |
 
 ---
 
@@ -48,10 +61,11 @@ codex-ai/
 
 All sub-agents have access to a centralized suite of specialized Python tools:
 
-*   **`execute_python`**: Runs code in a sandboxed subprocess with real-time output.
-*   **`analyze_code`**: Multi-language syntax, PEP8 style, and readability analysis.
+*   **`execute_python`**: Runs code in a sandboxed subprocess with real-time output and security blocks.
+*   **`analyze_code`**: Multi-language syntax, style, and readability analysis (Python, JS/TS).
 *   **`security_scan`**: Scans for 17+ vulnerability patterns including injection and hardcoded secrets.
-*   **`explain_code`**: Structural decomposition found in functions, classes, and logic.
+*   **`explain_code`**: Structural decomposition found in functions, classes, and logic across languages.
+*   **`generate_tests`**: Boilerplate unit test generation (Pytest/Unittest) for Python functions.
 *   **`format_code`**: Normalizes whitespace and ensures project-wide style consistency.
 
 ---
@@ -78,6 +92,7 @@ GOOGLE_API_KEY=your_key_here
 
 ### 3. Launch
 ```bash
+# Start the FastAPI backend
 python server.py
 ```
 > **Pro Tip:** If you see `database is locked`, ensure only one terminal is running `server.py`. SQLite supports only one writing process at a time.
