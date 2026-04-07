@@ -89,6 +89,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ─────────────────────────── HELPERS ──────────────────────────────────────────
+def safe_model_map(model_name: str) -> str:
+    """Translates UI model names to valid Gemini technical IDs (2026 version)."""
+    if not model_name: return "gemini-2.5-flash"
+    m = model_name.lower().replace("models/", "")
+    if "2.5-pro" in m: return "gemini-2.5-pro"
+    if "2.5-flash" in m: return "gemini-2.5-flash"
+    if "3.1-flash" in m: return "gemini-3.1-flash"
+    return m
+
 # ─────────────────────────── MODELS ──────────────────────────────────────────
 
 class RunRequest(BaseModel):
@@ -143,9 +153,21 @@ async def truncate_history(data: dict):
     if not session_id:
         return {"error": "Missing session_id"}
     conn = sqlite3.connect(DB_FILE)
-    conn.execute('''DELETE FROM cx_history WHERE session_id = ? AND id NOT IN (
-        SELECT id FROM cx_history WHERE session_id = ? ORDER BY id ASC LIMIT ?
-    )''', (session_id, session_id, keep_count))
+    # Get the ID at the keep_count index to truncate after it
+    cursor = conn.execute('SELECT id FROM cx_history WHERE session_id = ? ORDER BY id ASC LIMIT 1 OFFSET ?', (session_id, keep_count))
+    row = cursor.fetchone()
+    if row:
+        target_id = row[0]
+        conn.execute('DELETE FROM cx_history WHERE session_id = ? AND id >= ?', (session_id, target_id))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+@app.post("/api/history/clear")
+async def clear_all_history():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute('DELETE FROM cx_history')
+    conn.execute('DELETE FROM cx_sessions')
     conn.commit()
     conn.close()
     return {"status": "success"}
@@ -156,7 +178,20 @@ async def run_agent(request: RunRequest):
     from google.adk.sessions import InMemorySessionService
     from google.genai import types as genai_types
 
-    input_text = request.newMessage.get("content", "")
+    # Handle both 'content' string and 'parts' list from frontend
+    input_text = request.newMessage.get("content")
+    if not input_text:
+        parts = request.newMessage.get("parts", [])
+        input_text = " ".join([p.get("text", "") for p in parts if isinstance(p, dict)])
+
+    # Ensure model compatibility (Map futuristic technical IDs to real ones)
+    actual_model = safe_model_map(request.model)
+
+    # Propagate to agent and sub-agents
+    root_agent.model = actual_model
+    if hasattr(root_agent, 'sub_agents') and root_agent.sub_agents:
+        for sa in root_agent.sub_agents:
+            sa.model = actual_model
 
     # Build ADK Runner with auto session creation
     session_service = InMemorySessionService()
@@ -181,32 +216,70 @@ async def run_agent(request: RunRequest):
             yield "\n[Error: GOOGLE_API_KEY is missing in .env or environment!]"
             return
 
+        active_agent = "Codex"
+        
         try:
             async for event in runner.run_async(
                 user_id=request.userId,
                 session_id=request.sessionId,
                 new_message=new_message,
             ):
-                # Extract text from the event's content parts
                 if event.content and event.content.parts:
                     for part in event.content.parts:
+                        # 1. Advanced Agent Detection (Internal ADK property for stream ownership)
+                        event_agent = getattr(event, 'agent', None)
+                        if event_agent and hasattr(event_agent, 'name'):
+                            name = event_agent.name
+                            if name != active_agent:
+                                active_agent = name
+                                if "codex_agent" not in name:
+                                    # Extract specialist name part (e.g. coding from coding_agent)
+                                    cls_part = name.replace("_agent", "")
+                                    pill = f'<div class="tool-call-pill pill-{cls_part}"><span class="tool-pill-dot"></span>{name}</div>'
+                                    full_response += pill
+                                    yield pill
+
+                        # 2. Direct Function Call Interception (Delegation triggers)
+                        f_call = getattr(part, 'function_call', None)
+                        if f_call:
+                            call_name = f_call.name
+                            if "agent" in call_name.lower():
+                                cls_part = call_name.replace("_agent", "")
+                                pill = f'<div class="tool-call-pill pill-{cls_part}"><span class="tool-pill-dot"></span>{call_name}</div>'
+                                full_response += pill
+                                yield pill
+
+                        # 3. Regular text chunks
                         if hasattr(part, 'text') and part.text:
                             full_response += part.text
                             yield part.text
+
+            if not full_response:
+                yield "The Supervisor is delegating to specialized agents..."
+
             if full_response:
-                save_to_db(request.sessionId, "assistant", full_response, agent_name="Codex")
+                save_to_db(request.sessionId, "agent", full_response, agent_name=active_agent)
         except Exception as e:
             err_msg = str(e)
             print(f"Agent Error: {err_msg}")
-            yield f"\n[Error: {err_msg}]"
+            # If it's the "must contain either output text" error, it means delegation failed
+            if "model output must contain" in err_msg:
+                yield "\n[Agent Delegation Error: The model provided an empty response. This often happens if sub-agent models are misconfigured. Retrying...]"
+            else:
+                yield f"\n[Error: {err_msg}]"
 
     return StreamingResponse(event_generator(), media_type="text/plain")
 
 @app.post("/api/model")
 async def set_model(data: dict):
     model = data.get("model")
-    root_agent.model = model
-    return {"status": "success", "model": model}
+    actual_model = safe_model_map(model)
+    root_agent.model = actual_model
+    # Propagate model choice to all specialized sub-agents
+    if hasattr(root_agent, 'sub_agents') and root_agent.sub_agents:
+        for sa in root_agent.sub_agents:
+            sa.model = actual_model
+    return {"status": "success", "model": model, "actual_model": actual_model}
 
 # ── STATIC FILES (LAST) ──────────────────────────────────────
 

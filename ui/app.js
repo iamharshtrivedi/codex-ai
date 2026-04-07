@@ -10,7 +10,7 @@ const CONFIG = {
   userId: localStorage.getItem('cx_user') || 'user_1',
   sessionId: localStorage.getItem('cx_session') || '',
   appName: 'codex_agent',
-  model: localStorage.getItem('cx_model') || 'gemini-3-flash',
+  model: localStorage.getItem('cx_model') || 'gemini-2.5-flash',
 };
 
 const UI = {
@@ -102,14 +102,23 @@ async function selectModel(e, model, name) {
 
 function updateModelUI() {
   const nameMap = {
-    'gemini-3-flash': 'Gemini 3 Flash',
-    'gemini-3-pro': 'Gemini 3 Pro',
+    'gemini-3-flash': 'Gemini 3.1 Flash',
+    'gemini-3-pro': 'Gemini 3.Pro',
     'gemini-2.5-flash': 'Gemini 2.5 Flash'
   };
   UI.activeModelName().textContent = nameMap[CONFIG.model] || CONFIG.model;
   document.querySelectorAll('.model-option').forEach(opt => {
     opt.classList.toggle('active', opt.dataset.model === CONFIG.model);
   });
+}
+
+function mapFrontendToBackendModel(model) {
+  const map = {
+    'gemini-3-flash': 'gemini-3.1-flash-live-preview',
+    'gemini-3-pro': 'gemini-3.1-pro-preview',
+    'gemini-2.5-flash': 'gemini-2.5-flash'
+  };
+  return map[model] || model;
 }
 
 // ── Session & History ───────────────────────────────────────
@@ -194,10 +203,16 @@ async function loadPersistentHistory(sessionId) {
 // ── Messaging Logic ─────────────────────────────────────────
 
 async function sendMessage(text) {
+  if (isThinking) return;
+  isThinking = true;
+  
   const input = UI.userInput();
   const rawMsg = (text !== undefined ? text : input.value).trim();
-  if (!rawMsg && pendingFiles.length === 0) return;
-  if (isThinking) return;
+  if (!rawMsg && pendingFiles.length === 0) {
+    isThinking = false;
+    return;
+  }
+  UI.sendBtn().disabled = true;
 
   const filesToSend = [...pendingFiles];
   clearPendingFiles();
@@ -221,8 +236,6 @@ async function sendMessage(text) {
   appendMessage('user', rawMsg, true, filesToSend);
   
   const thinkRow = appendThinking();
-  isThinking = true;
-  UI.sendBtn().disabled = true;
 
   try {
     const parts = buildMessageParts(rawMsg, filesToSend);
@@ -233,7 +246,7 @@ async function sendMessage(text) {
         appName: CONFIG.appName,
         userId: CONFIG.userId,
         sessionId: currentChatId,
-        model: CONFIG.model,
+        model: mapFrontendToBackendModel(CONFIG.model),
         newMessage: { role: 'user', parts },
       }),
     });
@@ -243,29 +256,52 @@ async function sendMessage(text) {
     // Handle Streaming Response
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    thinkRow.remove();
-
+    
     let fullResponse = "";
-    const agentRow = appendMessage('agent', '', true);
+    const agentRow = thinkRow;
     const contentEl = agentRow.querySelector('.msg-content');
+    let chunkReceived = false;
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      
+      if (!chunkReceived) {
+        contentEl.innerHTML = ''; 
+        chunkReceived = true;
+      }
+      
       const chunk = decoder.decode(value, { stream: true });
       fullResponse += chunk;
       contentEl.innerHTML = renderMarkdown(fullResponse);
       scrollToBottom();
     }
 
-    // Final syntax highlight pass
+    // Final avatar
+    const avatar = agentRow.querySelector('.msg-avatar');
+    avatar.innerHTML = '🤖';
+    
+    // Add msg-actions and data-raw-text after stream finishes
+    contentEl.dataset.rawText = encodeURIComponent(fullResponse);
+    const actionsWrap = document.createElement('div');
+    actionsWrap.className = 'msg-actions';
+    actionsWrap.innerHTML = `
+      <button class="msg-action-btn regenerate-btn" onclick="regenerateLastResponse()" title="Regenerate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>
+      <button class="msg-action-btn copy-btn" onclick="copyMessageText(this)" title="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
+    `;
+    agentRow.querySelector('.msg-body').appendChild(actionsWrap);
+    
+    // Remove regenerate from previous agent messages
+    document.querySelectorAll('.msg-row[data-role="agent"] .regenerate-btn').forEach((btn, idx, arr) => {
+      if (idx < arr.length - 1) btn.remove();
+    });
+    
     agentRow.querySelectorAll('pre code').forEach(el => Prism.highlightElement(el));
     initCodeHeaders(agentRow);
-    await saveMessageLocally(currentChatId, 'agent', fullResponse);
     updateSaveStatus(true);
     fetchSessions();
   } catch (err) {
-    thinkRow.remove();
+    if (thinkRow) thinkRow.remove();
     appendMessage('agent', `⚠️ **Server error.**\n\n\`\`\`\n${err.message}\n\`\`\``, true);
   } finally {
     isThinking = false;
@@ -276,15 +312,18 @@ async function sendMessage(text) {
 
 async function handleHistoryTruncation(idx) {
   try {
+    const rows = [...document.querySelectorAll('.msg-row')];
+    // Backend truncate
     await fetch(`${CONFIG.serverUrl}/api/history/truncate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: currentChatId, keep_count: idx })
     });
-    const rows = [...document.querySelectorAll('.msg-row')];
+    // Frontend UI truncate
     for (let i = idx; i < rows.length; i++) rows[i].remove();
-  } catch (e) { }
+  } catch (e) { console.error('Truncate failed:', e); }
   editMode = false;
+  editingId = null;
   editingIndex = null;
   document.querySelectorAll('.editing-highlight').forEach(el => el.classList.remove('editing-highlight'));
 }
@@ -303,38 +342,7 @@ function buildMessageParts(text, files) {
   return parts.length ? parts : [{ text: '' }];
 }
 
-function processAgentResponse(data) {
-  let events = Array.isArray(data) ? data : (data.events || [data]);
-  let toolCalls = [];
-  let finalText = '';
-  let agentName = 'Codex';
-
-  const extract = (obj) => {
-    const parts = obj?.parts || obj?.content?.parts || (typeof obj?.content === 'string' ? [{text: obj.content}] : []);
-    parts.forEach(p => {
-      if (p.text) finalText += p.text;
-      if (p.function_call || p.toolCall) toolCalls.push(p.function_call?.name || p.toolCall?.name || 'tool');
-    });
-    if (obj?.agent_name || obj?.name) {
-      const n = obj.agent_name || obj.name;
-      if (n !== 'primary_agent') agentName = n.split('_').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
-    }
-  };
-
-  events.forEach(e => {
-    if (e.role === 'user') return;
-    if (e.agent_message) extract(e.agent_message);
-    else if (e.message) extract(e.message);
-    else if (e.text) finalText += e.text;
-    else extract(e);
-  });
-
-  if (toolCalls.length) renderToolPills(toolCalls);
-  
-  const content = finalText.trim() || (toolCalls.length ? `_Using tools: ${toolCalls.join(', ')}..._` : '...');
-  appendMessage('agent', content, true, [], agentName);
-  saveMessageLocally(currentChatId, 'agent', content);
-}
+// processAgentResponse removed - streaming replaces it
 
 // ── UI Components ───────────────────────────────────────────
 
@@ -344,19 +352,37 @@ function appendMessage(role, text, done = false, files = [], customName = null) 
   row.className = 'msg-row';
   row.dataset.role = role;
 
+  const isAgent = role === 'agent' || role === 'assistant';
+
+  // Generate actions
+  let actions = '';
+  if (role === 'user') {
+    actions += `<button class="message-edit-btn" onclick="editPrompt(this)" title="Edit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>`;
+  } else {
+    actions += `<button class="msg-action-btn regenerate-btn" onclick="regenerateLastResponse()" title="Regenerate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>`;
+  }
+  
+  // Safe copy button using reference to current message text
+  actions += `<button class="msg-action-btn copy-btn" onclick="copyMessageText(this)" title="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
+
   const innerHTML = `
-    <div class="msg-avatar ${role}">${role === 'agent' ? (done ? '🤖' : '⌨') : 'U'}</div>
+    <div class="msg-avatar ${role === 'user' ? 'user' : 'agent'}">${isAgent ? (done ? '🤖' : '⌨️') : 'U'}</div>
     <div class="msg-body">
       <div class="msg-name">${role === 'user' ? 'You' : (customName || 'Codex')}</div>
-      <div class="msg-content">${done && role === 'agent' ? renderMarkdown(text) : `<p>${text}</p>`}</div>
+      <div class="msg-content" data-raw-text="${encodeURIComponent(text)}">${done && isAgent ? renderMarkdown(text) : `<p>${text}</p>`}</div>
       ${renderAttachments(files)}
-      <div class="msg-actions">
-        ${role === 'user' ? `<button class="message-edit-btn" onclick="editPrompt(this)" title="Edit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : ''}
-        <button class="msg-action-btn" onclick="copyText('${text.replace(/'/g, "\\'")}')" title="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
-      </div>
+      <div class="msg-actions">${actions}</div>
     </div>
   `;
   row.innerHTML = innerHTML;
+
+  // REMOVE edit and regenerate buttons from all previous rows
+  if (role === 'user') {
+    msgs.querySelectorAll('.msg-row[data-role="user"] .message-edit-btn').forEach(btn => btn.remove());
+  } else if (isAgent) {
+    msgs.querySelectorAll('.msg-row[data-role="agent"] .regenerate-btn').forEach(btn => btn.remove());
+  }
+
   msgs.appendChild(row);
 
   if (done && role === 'agent') {
@@ -364,7 +390,7 @@ function appendMessage(role, text, done = false, files = [], customName = null) 
     initCodeHeaders(row);
   }
 
-  msgs.scrollTop = msgs.scrollHeight;
+  scrollToBottom();
   return row;
 }
 
@@ -385,13 +411,15 @@ function appendThinking() {
   const row = document.createElement('div');
   row.className = 'msg-row';
   row.innerHTML = `
-    <div class="msg-avatar agent">⌨</div>
+    <div class="msg-avatar agent">⌨️</div>
     <div class="msg-body">
       <div class="msg-name">Codex</div>
-      <div class="msg-content"><div class="thinking-dots"><span></span><span></span><span></span></div></div>
+      <div class="msg-content">
+        <div class="thinking-dots"><span></span><span></span><span></span></div>
+      </div>
     </div>`;
   UI.messages().appendChild(row);
-  UI.messages().scrollTop = UI.messages().scrollHeight;
+  scrollToBottom();
   return row;
 }
 
@@ -405,8 +433,8 @@ function renderToolPills(calls) {
 // ── Utilities ───────────────────────────────────────────────
 
 function scrollToBottom() {
-  const msgs = UI.messages();
-  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+  const content = document.querySelector('.content');
+  if (content) content.scrollTop = content.scrollHeight;
 }
 
 function showChat() {
@@ -452,6 +480,7 @@ function editPrompt(btn) {
   onInput(UI.userInput());
 
   editMode = true;
+  editingId = currentChatId;
   editingIndex = idx;
   document.querySelectorAll('.editing-highlight').forEach(el => el.classList.remove('editing-highlight'));
   row.classList.add('editing-highlight');
@@ -536,9 +565,12 @@ function clearAllHistory() {
 }
 
 async function clearAllHistoryOnServer() {
-  // Simplified for client side; server-side mass delete not implemented in this snippet
-  localStorage.removeItem('cx_session');
-  showToast('History cleared');
+  try {
+    await fetch(`${CONFIG.serverUrl}/api/history/clear`, { method: 'POST' });
+    showToast('All history wiped.');
+  } catch (err) {
+    showToast('Failed to wipe server history.');
+  }
 }
 
 // ── File Management ─────────────────────────────────────────
@@ -747,4 +779,23 @@ function openLightbox(src) {
   lb.classList.add('active');
 }
 
-function closeLightbox() { document.getElementById('lightbox').classList.remove('active'); }
+function copyMessageText(btn) {
+  const content = btn.closest('.msg-body').querySelector('.msg-content');
+  const text = decodeURIComponent(content.dataset.rawText || '');
+  copyText(text);
+}
+
+async function regenerateLastResponse() {
+  const rows = [...document.querySelectorAll('.msg-row')];
+  const lastUserRow = [...document.querySelectorAll('.msg-row[data-role="user"]')].pop();
+  if (!lastUserRow) return;
+  
+  const idx = rows.indexOf(lastUserRow);
+  const text = decodeURIComponent(lastUserRow.querySelector('.msg-content').dataset.rawText || '');
+  
+  // Truncate from the index AFTER the last user message
+  await handleHistoryTruncation(idx + 1);
+  
+  // Re-send the last user prompt
+  sendMessage(text);
+}
