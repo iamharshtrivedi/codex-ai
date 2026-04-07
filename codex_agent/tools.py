@@ -6,15 +6,43 @@ import ast
 import re
 
 def execute_python(code: str) -> dict:
-    """Executes a Python code snippet and returns stdout/stderr."""
-    blocked = ["os.system", "shutil.rmtree", "__import__('os').remove"]
-    for b in blocked:
-        if b in code:
-            return {"status": "error", "output": "", "error": f"Blocked: '{b}'."}
+    """Executes a Python code snippet using AST-based safety inspection."""
+    # ── ADVANCED AST SAFETY CHECK ───────────────────────────────────────────
+    dangerous_modules = {"os", "sys", "subprocess", "shutil", "socket", "requests", "urllib", "pickle", "marshal"}
+    dangerous_calls = {"eval", "exec", "open", "compile", "breakpoint", "input", "__import__"}
+    
+    try:
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            # Check for direct imports: import os
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split('.')[0] in dangerous_modules:
+                        return {"status": "error", "output": "", "error": f"Security: Forbidden import '{alias.name}'"}
+            # Check for from-imports: from os import system
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.split('.')[0] in dangerous_modules:
+                    return {"status": "error", "output": "", "error": f"Security: Forbidden import from '{node.module}'"}
+            # Check for function calls: eval() or os.system()
+            if isinstance(node, ast.Call):
+                func = node.func
+                # Case: eval()
+                if isinstance(func, ast.Name) and func.id in dangerous_calls:
+                    return {"status": "error", "output": "", "error": f"Security: Forbidden function call '{func.id}()'"}
+                # Case: os.system()
+                if isinstance(func, ast.Attribute) and func.attr in dangerous_calls:
+                    return {"status": "error", "output": "", "error": f"Security: Forbidden attribute access '.{func.attr}'"}
+    except SyntaxError as e:
+        return {"status": "error", "output": "", "error": f"Syntax Error: {str(e)}"}
+    except Exception as e:
+        return {"status": "error", "output": "", "error": f"Static Analysis Failure: {str(e)}"}
+
+    # ── EXECUTION ──────────────────────────────────────────────────────────
     try:
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write(code)
             tmp = f.name
+        # Run in a restricted subprocess with a timeout
         result = subprocess.run([sys.executable, tmp], capture_output=True, text=True, timeout=15)
         os.unlink(tmp)
         return {
@@ -23,9 +51,10 @@ def execute_python(code: str) -> dict:
             "error": result.stderr.strip(),
         }
     except subprocess.TimeoutExpired:
-        return {"status": "error", "output": "", "error": "Timed out after 15s."}
+        if os.path.exists(tmp): os.unlink(tmp)
+        return {"status": "error", "output": "", "error": "Execution timed out after 15s."}
     except Exception as e:
-        return {"status": "error", "output": "", "error": str(e)}
+        return {"status": "error", "output": "", "error": f"Runtime Error: {str(e)}"}
 
 def analyze_code(code: str, language: str = "python") -> dict:
     """Analyzes code for syntax errors, style issues, and suggestions."""

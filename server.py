@@ -220,8 +220,9 @@ async def run_agent(request: RunRequest):
         
         try:
             async for event in runner.run_async(
-                user_id=request.userId,
-                session_id=request.sessionId,
+                appName=request.appName,
+                userId=request.userId,
+                sessionId=request.sessionId,
                 new_message=new_message,
             ):
                 if event.content and event.content.parts:
@@ -287,4 +288,6 @@ app.mount("/ui", StaticFiles(directory=ui_dir), name="ui")
 app.mount("/", StaticFiles(directory=ui_dir, html=True), name="static")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

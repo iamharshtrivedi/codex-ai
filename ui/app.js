@@ -430,12 +430,29 @@ function renderToolPills(calls) {
   UI.messages().appendChild(wrap);
 }
 
-// ── Utilities ───────────────────────────────────────────────
+// ── Input Handling ──────────────────────────────────────────
+
+UI.promptInput().addEventListener('keydown', (e) => {
+  // Cmd/Ctrl + Enter to send
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
 
 function scrollToBottom() {
-  const content = document.querySelector('.content');
-  if (content) content.scrollTop = content.scrollHeight;
+  const container = UI.messages();
+  container.scrollTo({
+    top: container.scrollHeight,
+    behavior: 'smooth'
+  });
 }
+
+function focusInput() {
+  UI.promptInput().focus();
+}
+
+// ── Utilities ───────────────────────────────────────────────
 
 function showChat() {
   const welcome = UI.welcome();
