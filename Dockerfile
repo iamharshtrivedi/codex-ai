@@ -24,9 +24,10 @@ COPY . .
 # Ensure the database directory exists and has correct permissions
 RUN mkdir -p database && chmod 777 database
 
-# Cloud Run injects PORT env var; default to 8080
+# Default port for Cloud Run
 ENV PORT=8080
 EXPOSE 8080
 
-# Start the FastAPI server using the dedicated entry point
+# Start the FastAPI server
+# We use python server.py to trigger the __main__ block which handles port configuration
 CMD ["python", "server.py"]

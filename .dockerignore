@@ -1,0 +1,13 @@
+.venv
+.git
+.github
+.vscode
+.idea
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+database/chat_history.db
+.env
+tests

@@ -110,6 +110,11 @@ class RunRequest(BaseModel):
 
 # ─────────────────────────── ROUTES ──────────────────────────────────────────
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Cloud Run/K8s."""
+    return {"status": "healthy", "service": "codex-ai"}
+
 @app.get("/api/sessions")
 async def get_sessions():
     conn = sqlite3.connect(DB_FILE)
@@ -289,5 +294,16 @@ app.mount("/", StaticFiles(directory=ui_dir, html=True), name="static")
 
 if __name__ == "__main__":
     import os
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Cloud Run provides the PORT environment variable
+    port = int(os.environ.get("PORT", 8080))
+    print(f"🚀 Starting Codex AI Server on port {port}...")
+    print(f"🔗 Health Check: http://0.0.0.0:{port}/health")
+    
+    # Run uvicorn with standard production settings
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=port, 
+        proxy_headers=True,
+        forwarded_allow_ips="*"
+    )
