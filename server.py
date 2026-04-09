@@ -75,11 +75,20 @@ def save_to_db(session_id, role, content, agent_name=None, files=None):
         print(f"DB Error: {e}")
 
 # ─────────────────────────── APP SETUP ───────────────────────────────────────
-
 from google.adk.cli.fast_api import get_fast_api_app
 from codex_agent.agent import root_agent
 
 app = FastAPI()
+
+@app.middleware("http")
+async def add_cache_control_header(request: Request, call_next):
+    response = await call_next(request)
+    # Prevent caching for the main index.html and UI assets to ensure version updates are seen
+    if request.url.path == "/" or request.url.path.endswith(".html") or request.url.path.startswith("/ui/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 app.add_middleware(
     CORSMiddleware,
